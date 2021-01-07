@@ -1,12 +1,14 @@
 #!/bin/bash
 
 # apollo config db info
-apollo_config_db_url=jdbc:mysql://localhost:3306/ApolloConfigDB?characterEncoding=utf8
+db_address=${DB_ADDRESS:-localhost:3306}
+
+apollo_config_db_url=jdbc:mysql://$db_address/ApolloConfigDB?characterEncoding=utf8
 apollo_config_db_username=root
 apollo_config_db_password=
 
 # apollo portal db info
-apollo_portal_db_url=jdbc:mysql://localhost:3306/ApolloPortalDB?characterEncoding=utf8
+apollo_portal_db_url=jdbc:mysql://$db_address/ApolloPortalDB?characterEncoding=utf8
 apollo_portal_db_username=root
 apollo_portal_db_password=
 
@@ -29,7 +31,9 @@ eureka_service_url=$config_server_url/eureka/
 portal_url=http://localhost:8070
 
 # JAVA OPTS
-BASE_JAVA_OPTS="-Denv=dev -Xmx200m -Dmanagement.health.diskspace.enabled=false"
+BASE_JAVA_OPTS="-Denv=dev -Xmx200m"
+# Disalbe disk free space check of SpringBoot
+BASE_JAVA_OPTS="$BASE_JAVA_OPTS -Dmanagement.health.diskspace.enabled=false"
 CLIENT_JAVA_OPTS="$BASE_JAVA_OPTS -Dapollo.meta=$config_server_url"
 SERVER_JAVA_OPTS="$BASE_JAVA_OPTS -Dspring.profiles.active=github -Deureka.service.url=$eureka_service_url -Deureka.client.registry-fetch-interval-seconds=10"
 PORTAL_JAVA_OPTS="$BASE_JAVA_OPTS -Ddev_meta=$config_server_url -Dspring.profiles.active=github,auth -Deureka.client.enabled=false -Dhibernate.query.plan_cache_max_size=192"
@@ -105,6 +109,9 @@ function checkServerAlive {
 checkJava
 
 if [ "$1" = "start" ] ; then
+  # wait for database ready
+  sleep 5
+
   if [ "$APOLLO_SERVICE" == "1" ];then
     echo "==== starting service ===="
     echo "Service logging file is $SERVICE_LOG"
