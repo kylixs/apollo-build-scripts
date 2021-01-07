@@ -4,7 +4,7 @@
 # Run with:
 # docker-compose up
 
-FROM openjdk:8-jre-alpine
+FROM openjdk:8-alpine
 MAINTAINER nobodyiam<https://github.com/nobodyiam>
 
 COPY apollo-all-in-one.jar /apollo-quick-start/apollo-all-in-one.jar

@@ -23,32 +23,36 @@ else
 fi
 
 # meta server url
-config_server_url=http://localhost:8080
+config_server_url=${CONFIG_SERVER_URL:-http://localhost:8080}
 admin_server_url=http://localhost:8090
 eureka_service_url=$config_server_url/eureka/
 portal_url=http://localhost:8070
 
 # JAVA OPTS
-BASE_JAVA_OPTS="-Denv=dev"
+BASE_JAVA_OPTS="-Denv=dev -Xmx200m -Dmanagement.health.diskspace.enabled=false"
 CLIENT_JAVA_OPTS="$BASE_JAVA_OPTS -Dapollo.meta=$config_server_url"
-SERVER_JAVA_OPTS="$BASE_JAVA_OPTS -Dspring.profiles.active=github -Deureka.service.url=$eureka_service_url"
+SERVER_JAVA_OPTS="$BASE_JAVA_OPTS -Dspring.profiles.active=github -Deureka.service.url=$eureka_service_url -Deureka.client.registry-fetch-interval-seconds=10"
 PORTAL_JAVA_OPTS="$BASE_JAVA_OPTS -Ddev_meta=$config_server_url -Dspring.profiles.active=github,auth -Deureka.client.enabled=false -Dhibernate.query.plan_cache_max_size=192"
 
 # executable
 JAR_FILE=apollo-all-in-one.jar
 SERVICE_DIR=./service
+LOG_DIR=./logs
 SERVICE_JAR_NAME=apollo-service.jar
 SERVICE_JAR=$SERVICE_DIR/$SERVICE_JAR_NAME
-SERVICE_LOG=$SERVICE_DIR/apollo-service.log
+SERVICE_LOG=$LOG_DIR/apollo-service.log
+ADMIN_LOG=$LOG_DIR/apollo-admin.log
 PORTAL_DIR=./portal
 PORTAL_JAR_NAME=apollo-portal.jar
 PORTAL_JAR=$PORTAL_DIR/$PORTAL_JAR_NAME
-PORTAL_LOG=$PORTAL_DIR/apollo-portal.log
+PORTAL_LOG=$LOG_DIR/apollo-portal.log
 CLIENT_DIR=./client
 CLIENT_JAR=$CLIENT_DIR/apollo-demo.jar
 
 # go to script directory
 cd "${0%/*}"
+
+mkdir -p $LOG_DIR
 
 function checkJava {
   if [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then
@@ -76,7 +80,7 @@ function checkJava {
 
 function checkServerAlive {
   declare -i counter=0
-  declare -i max_counter=24 # 24*5=120s
+  declare -i max_counter=100 # 24*5=120s
   declare -i total_time=0
 
   SERVER_URL="$1"
@@ -101,83 +105,82 @@ function checkServerAlive {
 checkJava
 
 if [ "$1" = "start" ] ; then
-  echo "==== starting service ===="
-  echo "Service logging file is $SERVICE_LOG"
-  export JAVA_OPTS="$SERVER_JAVA_OPTS -Dlogging.file=./apollo-service.log -Dspring.datasource.url=$apollo_config_db_url -Dspring.datasource.username=$apollo_config_db_username -Dspring.datasource.password=$apollo_config_db_password"
+  if [ "$APOLLO_SERVICE" == "1" ];then
+    echo "==== starting service ===="
+    echo "Service logging file is $SERVICE_LOG"
+    export JAVA_OPTS="$SERVER_JAVA_OPTS -Dlogging.file=./apollo-service.log -Dspring.datasource.url=$apollo_config_db_url -Dspring.datasource.username=$apollo_config_db_username -Dspring.datasource.password=$apollo_config_db_password"
 
-  if [[ -f $SERVICE_JAR ]]; then
-    rm -rf $SERVICE_JAR
+    if [[ -f $SERVICE_JAR ]]; then
+      rm -rf $SERVICE_JAR
+    fi
+
+    ln $JAR_FILE $SERVICE_JAR
+    chmod a+x $SERVICE_JAR
+
+    java $JAVA_OPTS -jar $SERVICE_JAR --configservice --adminservice &> $SERVICE_LOG &
+
+    rc=$?
+    if [[ $rc != 0 ]];
+    then
+      echo "Failed to start service, return code: $rc. Please check $SERVICE_LOG for more information."
+      exit $rc;
+    fi
+
+    printf "Waiting for config service startup"
+    checkServerAlive $config_server_url
+    rc=$?
+    if [[ $rc != 0 ]];
+    then
+      printf "\nConfig service failed to start in $rc seconds! Please check $SERVICE_LOG for more information.\n"
+      exit 1;
+    fi
+    printf "\nConfig service started. You may visit $config_server_url for service status now!\n"
+
+    printf "Waiting for admin service startup"
+    checkServerAlive $admin_server_url
+    rc=$?
+    if [[ $rc != 0 ]];
+    then
+      printf "\nAdmin service failed to start in $rc seconds! Please check $SERVICE_LOG for more information.\n"
+      exit 1;
+    fi
+    printf "\nAdmin service started\n"
   fi
 
-  ln $JAR_FILE $SERVICE_JAR
-  chmod a+x $SERVICE_JAR
+  if [ "$APOLLO_PORTAL" == "1" ]; then
+    echo "==== starting portal ===="
+    echo "Portal logging file is $PORTAL_LOG"
+    export JAVA_OPTS="$PORTAL_JAVA_OPTS -Dlogging.file=./apollo-portal.log -Dserver.port=8070 -Dspring.datasource.url=$apollo_portal_db_url -Dspring.datasource.username=$apollo_portal_db_username -Dspring.datasource.password=$apollo_portal_db_password"
 
-  $SERVICE_JAR start --configservice --adminservice
+    if [[ -f $PORTAL_JAR ]]; then
+      rm -rf $PORTAL_JAR
+    fi
 
-  rc=$?
-  if [[ $rc != 0 ]];
-  then
-    echo "Failed to start service, return code: $rc. Please check $SERVICE_LOG for more information."
-    exit $rc;
+    ln $JAR_FILE $PORTAL_JAR
+    chmod a+x $PORTAL_JAR
+
+    java $JAVA_OPTS -jar $PORTAL_JAR --portal &> $PORTAL_LOG &
+    rc=$?
+    if [[ $rc != 0 ]];
+    then
+      echo "Failed to start portal, return code: $rc. Please check $PORTAL_LOG for more information."
+      exit $rc;
+    fi
+
+    printf "Waiting for portal startup"
+    checkServerAlive $portal_url
+    rc=$?
+    if [[ $rc != 0 ]];
+    then
+      printf "\nPortal failed to start in $rc seconds! Please check $PORTAL_LOG for more information.\n"
+      exit 1;
+    fi
+    printf "\nPortal started. You can visit $portal_url now!\n"
   fi
 
-  printf "Waiting for config service startup"
-  checkServerAlive $config_server_url
+  wait
+  echo "apollo exit"
 
-  rc=$?
-  if [[ $rc != 0 ]];
-  then
-    printf "\nConfig service failed to start in $rc seconds! Please check $SERVICE_LOG for more information.\n"
-    exit 1;
-  fi
-
-  printf "\nConfig service started. You may visit $config_server_url for service status now!\n"
-
-  printf "Waiting for admin service startup"
-  checkServerAlive $admin_server_url
-
-  rc=$?
-  if [[ $rc != 0 ]];
-  then
-    printf "\nAdmin service failed to start in $rc seconds! Please check $SERVICE_LOG for more information.\n"
-    exit 1;
-  fi
-
-  printf "\nAdmin service started\n"
-
-  echo "==== starting portal ===="
-  echo "Portal logging file is $PORTAL_LOG"
-  export JAVA_OPTS="$PORTAL_JAVA_OPTS -Dlogging.file=./apollo-portal.log -Dserver.port=8070 -Dspring.datasource.url=$apollo_portal_db_url -Dspring.datasource.username=$apollo_portal_db_username -Dspring.datasource.password=$apollo_portal_db_password"
-
-  if [[ -f $PORTAL_JAR ]]; then
-    rm -rf $PORTAL_JAR
-  fi
-
-  ln $JAR_FILE $PORTAL_JAR
-  chmod a+x $PORTAL_JAR
-
-  $PORTAL_JAR start --portal
-
-  rc=$?
-  if [[ $rc != 0 ]];
-  then
-    echo "Failed to start portal, return code: $rc. Please check $PORTAL_LOG for more information."
-    exit $rc;
-  fi
-
-  printf "Waiting for portal startup"
-  checkServerAlive $portal_url
-
-  rc=$?
-  if [[ $rc != 0 ]];
-  then
-    printf "\nPortal failed to start in $rc seconds! Please check $PORTAL_LOG for more information.\n"
-    exit 1;
-  fi
-
-  printf "\nPortal started. You can visit $portal_url now!\n"
-
-  exit 0;
 elif [ "$1" = "client" ] ; then
   if [ "$windows" == "1" ]; then
     java -classpath "$CLIENT_DIR;$CLIENT_JAR" $CLIENT_JAVA_OPTS com.ctrip.framework.apollo.demo.api.SimpleApolloConfigDemo
